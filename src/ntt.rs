@@ -1,3 +1,4 @@
+#[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
 use crate::{arith::*, number_theory::*, params::*};
@@ -106,7 +107,8 @@ pub fn build_ntt_tables(
     output
 }
 
-#[cfg(not(target_feature = "avx2"))]
+// Portable version of ntt_forward for non-x86_64 or non-AVX2 targets
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 pub fn ntt_forward(params: &Params, operand_overall: &mut [u64]) {
     if params.crt_count == 1 {
         ntt_forward_alt(params, operand_overall);
@@ -206,7 +208,8 @@ pub fn ntt_forward_alt(params: &Params, operand_overall: &mut [u64]) {
     }
 }
 
-#[cfg(target_feature = "avx2")]
+// AVX2/AVX-512 optimized version of ntt_forward for x86_64 with AVX2
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 pub fn ntt_forward(params: &Params, operand_overall: &mut [u64]) {
     if params.crt_count == 1 {
         ntt_forward_alt(params, operand_overall);
@@ -454,6 +457,8 @@ pub fn ntt_inverse_alt(params: &Params, operand_overall: &mut [u64]) {
     }
 }
 
+// AVX2 optimized version of ntt_inverse_256 for x86_64 with AVX2
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 pub fn ntt_inverse_256(params: &Params, operand_overall: &mut [u64]) {
     if params.crt_count == 1 {
         ntt_inverse_alt(params, operand_overall);
@@ -564,6 +569,14 @@ pub fn ntt_inverse_256(params: &Params, operand_overall: &mut [u64]) {
     }
 }
 
+// Portable fallback for ntt_inverse_256 on non-x86_64 or non-AVX2 targets
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+pub fn ntt_inverse_256(params: &Params, operand_overall: &mut [u64]) {
+    ntt_inverse_alt(params, operand_overall);
+}
+
+// AVX-512 optimized version of ntt_inverse for x86_64 with AVX-512
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub fn ntt_inverse(params: &Params, operand_overall: &mut [u64]) {
     if params.crt_count == 1 {
         ntt_inverse_alt(params, operand_overall);
@@ -648,7 +661,7 @@ pub fn ntt_inverse(params: &Params, operand_overall: &mut [u64]) {
                 } else {
                     unsafe {
                         for j in (0..t).step_by(8) {
-                            // Use AVX2 here
+                            // Use AVX-512 here
                             let p_x = &mut op[j] as *mut u64;
                             let p_y = &mut op[j + t] as *mut u64;
                             let x = _mm512_load_si512(p_x as *const _);
@@ -717,6 +730,12 @@ pub fn ntt_inverse(params: &Params, operand_overall: &mut [u64]) {
             }
         }
     }
+}
+
+// Portable fallback for ntt_inverse on non-x86_64 or non-AVX-512 targets
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+pub fn ntt_inverse(params: &Params, operand_overall: &mut [u64]) {
+    ntt_inverse_alt(params, operand_overall);
 }
 
 #[cfg(test)]
