@@ -6,6 +6,10 @@ pub fn multiply_uint_mod(a: u64, b: u64, modulus: u64) -> u64 {
     (((a as u128) * (b as u128)) % (modulus as u128)) as u64
 }
 
+pub fn add_uint_mod(a: u64, b: u64, modulus: u64) -> u64 {
+    (((a as u128) + (b as u128)) % (modulus as u128)) as u64
+}
+
 pub const fn log2(a: u64) -> u64 {
     std::mem::size_of::<u64>() as u64 * 8 - a.leading_zeros() as u64 - 1
 }
@@ -27,7 +31,7 @@ pub fn multiply_modular(params: &Params, a: u64, b: u64, c: usize) -> u64 {
 
 pub fn multiply_add_modular(params: &Params, a: u64, b: u64, x: u64, c: usize) -> u64 {
     if params.crt_count == 1 {
-        return multiply_uint_mod(a, b, params.moduli[c]);
+        return add_uint_mod(multiply_uint_mod(a, b, params.moduli[c]), x, params.moduli[c]);
     }
     barrett_coeff_u64(params, a * b + x, c)
 }
@@ -528,5 +532,56 @@ mod test {
             let val = rng.gen();
             assert_eq!(barrett_raw_u64(val, cr1, modulus), val % modulus);
         }
+    }
+
+    #[test]
+    fn add_uint_mod_correct() {
+        assert_eq!(add_uint_mod(3, 4, 11), 7);
+        assert_eq!(add_uint_mod(8, 5, 11), 2);
+        assert_eq!(add_uint_mod(0, 0, 11), 0);
+        assert_eq!(add_uint_mod(10, 10, 11), 9);
+        let large_mod = 180143985094819841u64;
+        assert_eq!(
+            add_uint_mod(large_mod - 1, 1, large_mod),
+            0
+        );
+        assert_eq!(
+            add_uint_mod(large_mod - 1, large_mod - 1, large_mod),
+            large_mod - 2
+        );
+    }
+
+    #[test]
+    fn multiply_add_modular_single_crt_includes_accumulator() {
+        let params = Params::init(
+            2048,
+            &vec![180143985094819841u64],
+            6.4,
+            2,
+            256,
+            20,
+            4,
+            8,
+            56,
+            8,
+            true,
+            9,
+            6,
+            1,
+            2048,
+            0,
+        );
+        assert_eq!(params.crt_count, 1);
+        let modulus = params.moduli[0];
+
+        assert_eq!(multiply_add_modular(&params, 3, 5, 7, 0), 22);
+        assert_eq!(multiply_add_modular(&params, 0, 5, 7, 0), 7);
+        assert_eq!(multiply_add_modular(&params, 3, 5, 0, 0), 15);
+
+        let a = modulus - 1;
+        let b = modulus - 1;
+        let x = modulus - 1;
+        let expected = ((((a as u128) * (b as u128)) + (x as u128)) % (modulus as u128)) as u64;
+        assert_eq!(multiply_add_modular(&params, a, b, x, 0), expected);
     }
 }

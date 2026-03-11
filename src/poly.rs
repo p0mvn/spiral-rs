@@ -1042,6 +1042,82 @@ mod test {
     }
 
     #[test]
+    fn alt_full_multiply_correctness_larger_dimensions() {
+        let params = get_alt_params();
+        let mut m1 = PolyMatrixRaw::zero(&params, 1, 2);
+        let mut m2 = PolyMatrixRaw::zero(&params, 2, 1);
+        m1.get_poly_mut(0, 0)[0] = 2;
+        m1.get_poly_mut(0, 1)[0] = 3;
+        m2.get_poly_mut(0, 0)[0] = 5;
+        m2.get_poly_mut(1, 0)[0] = 7;
+        let m1_ntt = to_ntt_alloc(&m1);
+        let m2_ntt = to_ntt_alloc(&m2);
+        let m3_ntt = &m1_ntt * &m2_ntt;
+        let m3 = from_ntt_alloc(&m3_ntt);
+        assert_eq!(m3.get_poly(0, 0)[0], 31);
+    }
+
+    #[test]
+    fn full_multiply_correctness_larger_dimensions() {
+        let params = get_params();
+        let mut m1 = PolyMatrixRaw::zero(&params, 1, 2);
+        let mut m2 = PolyMatrixRaw::zero(&params, 2, 1);
+        m1.get_poly_mut(0, 0)[0] = 2;
+        m1.get_poly_mut(0, 1)[0] = 3;
+        m2.get_poly_mut(0, 0)[0] = 5;
+        m2.get_poly_mut(1, 0)[0] = 7;
+        let m1_ntt = to_ntt_alloc(&m1);
+        let m2_ntt = to_ntt_alloc(&m2);
+        let m3_ntt = &m1_ntt * &m2_ntt;
+        let m3 = from_ntt_alloc(&m3_ntt);
+        assert_eq!(m3.get_poly(0, 0)[0], 31);
+    }
+
+    #[test]
+    fn alt_full_multiply_correctness_2x2() {
+        let params = get_alt_params();
+        // | 1 2 |   | 5 6 |   | 1*5+2*7  1*6+2*8 |   | 19 22 |
+        // | 3 4 | * | 7 8 | = | 3*5+4*7  3*6+4*8 | = | 43 50 |
+        let mut m1 = PolyMatrixRaw::zero(&params, 2, 2);
+        let mut m2 = PolyMatrixRaw::zero(&params, 2, 2);
+        m1.get_poly_mut(0, 0)[0] = 1;
+        m1.get_poly_mut(0, 1)[0] = 2;
+        m1.get_poly_mut(1, 0)[0] = 3;
+        m1.get_poly_mut(1, 1)[0] = 4;
+        m2.get_poly_mut(0, 0)[0] = 5;
+        m2.get_poly_mut(0, 1)[0] = 6;
+        m2.get_poly_mut(1, 0)[0] = 7;
+        m2.get_poly_mut(1, 1)[0] = 8;
+        let m1_ntt = to_ntt_alloc(&m1);
+        let m2_ntt = to_ntt_alloc(&m2);
+        let m3_ntt = &m1_ntt * &m2_ntt;
+        let m3 = from_ntt_alloc(&m3_ntt);
+        assert_eq!(m3.get_poly(0, 0)[0], 19);
+        assert_eq!(m3.get_poly(0, 1)[0], 22);
+        assert_eq!(m3.get_poly(1, 0)[0], 43);
+        assert_eq!(m3.get_poly(1, 1)[0], 50);
+    }
+
+    #[test]
+    fn alt_full_multiply_correctness_inner_dim_3() {
+        let params = get_alt_params();
+        let mut m1 = PolyMatrixRaw::zero(&params, 1, 3);
+        let mut m2 = PolyMatrixRaw::zero(&params, 3, 1);
+        m1.get_poly_mut(0, 0)[0] = 10;
+        m1.get_poly_mut(0, 1)[0] = 20;
+        m1.get_poly_mut(0, 2)[0] = 30;
+        m2.get_poly_mut(0, 0)[0] = 1;
+        m2.get_poly_mut(1, 0)[0] = 2;
+        m2.get_poly_mut(2, 0)[0] = 3;
+        let m1_ntt = to_ntt_alloc(&m1);
+        let m2_ntt = to_ntt_alloc(&m2);
+        let m3_ntt = &m1_ntt * &m2_ntt;
+        let m3 = from_ntt_alloc(&m3_ntt);
+        // 10*1 + 20*2 + 30*3 = 10 + 40 + 90 = 140
+        assert_eq!(m3.get_poly(0, 0)[0], 140);
+    }
+
+    #[test]
     fn to_vec_correctness() {
         let params = get_params();
         let mut m1 = PolyMatrixRaw::zero(&params, 1, 1);
