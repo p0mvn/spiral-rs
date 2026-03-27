@@ -426,4 +426,141 @@ mod test {
             bit_offs += num_bits;
         }
     }
+
+    // ----------------------------------------------------------------
+    // JSON parsing robustness tests
+    // ----------------------------------------------------------------
+
+    #[test]
+    #[should_panic]
+    fn params_from_json_invalid_json_panics() {
+        params_from_json("not valid json");
+    }
+
+    #[test]
+    #[should_panic]
+    fn params_from_json_empty_object_panics() {
+        params_from_json("{}");
+    }
+
+    #[test]
+    #[should_panic]
+    fn params_from_json_missing_n_panics() {
+        let cfg = r#"{"nu_1": 9, "nu_2": 6, "p": 256, "q2_bits": 20,
+                       "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 56}"#;
+        params_from_json(cfg);
+    }
+
+    #[test]
+    #[should_panic]
+    fn params_from_json_missing_p_panics() {
+        let cfg = r#"{"n": 2, "nu_1": 9, "nu_2": 6, "q2_bits": 20,
+                       "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 56}"#;
+        params_from_json(cfg);
+    }
+
+    #[test]
+    fn params_from_json_extra_fields_ignored() {
+        let cfg = r#"{"n": 2, "nu_1": 9, "nu_2": 6, "p": 256, "q2_bits": 20,
+                       "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 56,
+                       "instances": 1, "db_item_size": 2048,
+                       "extra_field": 999, "another": "hello"}"#;
+        let params = params_from_json(cfg);
+        assert_eq!(params.n, 2);
+        assert_eq!(params.pt_modulus, 256);
+    }
+
+    #[test]
+    fn params_from_json_defaults_instances_to_1() {
+        let cfg = r#"{"n": 2, "nu_1": 6, "nu_2": 2, "p": 256, "q2_bits": 20,
+                       "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 56,
+                       "db_item_size": 2048}"#;
+        let params = params_from_json(cfg);
+        assert_eq!(params.instances, 1);
+    }
+
+    #[test]
+    fn params_from_json_defaults_version_to_0() {
+        let cfg = r#"{"n": 2, "nu_1": 6, "nu_2": 2, "p": 256, "q2_bits": 20,
+                       "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 56,
+                       "db_item_size": 2048}"#;
+        let params = params_from_json(cfg);
+        assert_eq!(params.version, 0);
+    }
+
+    #[test]
+    fn params_from_json_computes_db_item_size_when_zero() {
+        let cfg = r#"{"n": 2, "nu_1": 6, "nu_2": 2, "p": 256, "q2_bits": 20,
+                       "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 56,
+                       "db_item_size": 0}"#;
+        let params = params_from_json(cfg);
+        let expected = 1 * 2 * 2 * 2048 * log2_ceil(256) as usize / 8;
+        assert_eq!(params.db_item_size, expected);
+    }
+
+    #[test]
+    fn params_from_json_computes_db_item_size_when_absent() {
+        let cfg = r#"{"n": 2, "nu_1": 6, "nu_2": 2, "p": 256, "q2_bits": 20,
+                       "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 56}"#;
+        let params = params_from_json(cfg);
+        let expected = 1 * 2 * 2 * 2048 * log2_ceil(256) as usize / 8;
+        assert_eq!(params.db_item_size, expected);
+    }
+
+    #[test]
+    fn params_from_json_q2_bits_clamped_to_minimum() {
+        let cfg = r#"{"n": 2, "nu_1": 6, "nu_2": 2, "p": 256, "q2_bits": 5,
+                       "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 56,
+                       "db_item_size": 2048}"#;
+        let params = params_from_json(cfg);
+        assert_eq!(params.q2_bits, MIN_Q2_BITS);
+    }
+
+    #[test]
+    fn params_from_json_direct_upload_disables_expansion() {
+        let cfg = r#"{"direct_upload": 1, "n": 5, "nu_1": 6, "nu_2": 3,
+                       "p": 65536, "q2_bits": 27,
+                       "t_gsw": 3, "t_conv": 56, "t_exp_left": 56, "t_exp_right": 56}"#;
+        let params = params_from_json(cfg);
+        assert!(!params.expand_queries);
+    }
+
+    #[test]
+    fn params_from_json_without_direct_upload_enables_expansion() {
+        let cfg = r#"{"n": 2, "nu_1": 6, "nu_2": 2, "p": 256, "q2_bits": 20,
+                       "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 56,
+                       "db_item_size": 2048}"#;
+        let params = params_from_json(cfg);
+        assert!(params.expand_queries);
+    }
+
+    #[test]
+    fn params_from_json_with_version_field() {
+        let cfg = r#"{"n": 2, "nu_1": 6, "nu_2": 2, "p": 256, "q2_bits": 20,
+                       "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 56,
+                       "db_item_size": 2048, "version": 3}"#;
+        let params = params_from_json(cfg);
+        assert_eq!(params.version, 3);
+    }
+
+    #[test]
+    fn params_from_json_various_valid_configs() {
+        let configs = [
+            r#"{"n": 2, "nu_1": 10, "nu_2": 6, "p": 512, "q2_bits": 21,
+                "t_gsw": 10, "t_conv": 4, "t_exp_left": 16, "t_exp_right": 56,
+                "instances": 11, "db_item_size": 100000}"#,
+            r#"{"n": 4, "nu_1": 9, "nu_2": 5, "p": 256, "q2_bits": 20,
+                "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 56,
+                "instances": 2, "db_item_size": 65536}"#,
+        ];
+        for cfg in configs {
+            let params = params_from_json(cfg);
+            assert!(params.n >= 1);
+            assert!(params.pt_modulus >= 1);
+            assert!(params.q2_bits >= MIN_Q2_BITS);
+            assert!(params.modulus > 0);
+            assert!(params.setup_bytes() > 0);
+            assert!(params.query_bytes() > 0);
+        }
+    }
 }

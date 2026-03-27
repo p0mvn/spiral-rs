@@ -313,3 +313,303 @@ impl Params {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::util::*;
+
+    fn default_moduli() -> Vec<u64> {
+        vec![268369921u64, 249561089u64]
+    }
+
+    fn single_modulus() -> Vec<u64> {
+        vec![180143985094819841u64]
+    }
+
+    /// Helper: build Params with standard defaults, overriding only the fields under test.
+    fn make_params(
+        moduli: &[u64],
+        n: usize,
+        pt_modulus: u64,
+        q2_bits: u64,
+        db_dim_1: usize,
+        db_dim_2: usize,
+        instances: usize,
+    ) -> Params {
+        Params::init(
+            2048, moduli, 6.4, n, pt_modulus, q2_bits, 4, 8, 56, 8, true, db_dim_1, db_dim_2,
+            instances, 2048, 0,
+        )
+    }
+
+    // ----------------------------------------------------------------
+    // q2_bits boundary tests
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn q2_bits_at_minimum_succeeds() {
+        let params = make_params(&default_moduli(), 2, 256, MIN_Q2_BITS, 9, 6, 1);
+        assert_eq!(params.q2_bits, MIN_Q2_BITS);
+        assert!(Q2_VALUES[params.q2_bits as usize] > 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn q2_bits_below_minimum_panics() {
+        make_params(&default_moduli(), 2, 256, MIN_Q2_BITS - 1, 9, 6, 1);
+    }
+
+    #[test]
+    fn q2_bits_at_table_maximum_succeeds() {
+        let max_q2 = (Q2_VALUES.len() - 1) as u64;
+        let params = make_params(&default_moduli(), 2, 256, max_q2, 9, 6, 1);
+        assert_eq!(params.q2_bits, max_q2);
+        assert!(Q2_VALUES[params.q2_bits as usize] > 0);
+    }
+
+    // ----------------------------------------------------------------
+    // Moduli count boundary tests
+    // ----------------------------------------------------------------
+
+    #[test]
+    #[should_panic]
+    fn too_many_moduli_panics() {
+        let moduli = vec![268369921u64; MAX_MODULI + 1];
+        Params::init(
+            2048, &moduli, 6.4, 2, 256, 20, 4, 8, 56, 8, true, 9, 6, 1, 2048, 0,
+        );
+    }
+
+    #[test]
+    fn single_modulus_at_max_slot_succeeds() {
+        let moduli = vec![268369921u64];
+        let params = Params::init(
+            2048, &moduli, 6.4, 2, 256, 20, 4, 8, 56, 8, true, 9, 6, 1, 2048, 0,
+        );
+        assert_eq!(params.crt_count, 1);
+    }
+
+    // ----------------------------------------------------------------
+    // Single-modulus vs dual-modulus NTT path
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn single_modulus_params_uses_crt_count_1() {
+        let params = make_params(&single_modulus(), 2, 256, 20, 9, 6, 1);
+        assert_eq!(params.crt_count, 1);
+        assert_eq!(params.modulus, single_modulus()[0]);
+        assert_eq!(params.ntt_tables.len(), 1);
+    }
+
+    #[test]
+    fn dual_modulus_params_uses_crt_count_2() {
+        let params = make_params(&default_moduli(), 2, 256, 20, 9, 6, 1);
+        assert_eq!(params.crt_count, 2);
+        assert_eq!(params.modulus, default_moduli()[0] * default_moduli()[1]);
+        assert_eq!(params.ntt_tables.len(), 2);
+        assert_ne!(params.mod0_inv_mod1, 0);
+        assert_ne!(params.mod1_inv_mod0, 0);
+    }
+
+    #[test]
+    fn single_modulus_crt_compose_is_identity() {
+        let params = make_params(&single_modulus(), 2, 256, 20, 9, 6, 1);
+        assert_eq!(params.crt_compose_1(42), 42);
+        assert_eq!(params.crt_compose_1(0), 0);
+        assert_eq!(params.crt_compose_1(params.modulus - 1), params.modulus - 1);
+    }
+
+    // ----------------------------------------------------------------
+    // Derived parameter consistency
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn derived_values_consistent_for_test_params() {
+        let params = get_test_params();
+        assert_eq!(params.poly_len, 2048);
+        assert_eq!(params.poly_len_log2, 11);
+        assert_eq!(params.crt_count, 2);
+        assert!(params.modulus > 0);
+        assert_eq!(params.modulus, params.moduli[0] * params.moduli[1]);
+        assert!(params.modulus_log2 > 0);
+        assert!(params.modulus_log2 <= 64);
+
+        assert!(params.ntt_tables.len() == params.crt_count);
+        for table in &params.ntt_tables {
+            assert_eq!(table.len(), 4);
+            for subtable in table {
+                assert_eq!(subtable.len(), params.poly_len);
+            }
+        }
+    }
+
+    #[test]
+    fn derived_values_consistent_for_short_keygen_params() {
+        let params = get_short_keygen_params();
+        assert_eq!(params.poly_len, 2048);
+        assert_eq!(params.n, 2);
+        assert_eq!(params.pt_modulus, 256);
+        assert_eq!(params.num_items(), (1 << 9) * (1 << 6));
+        assert_eq!(params.num_expanded(), 1 << 9);
+    }
+
+    #[test]
+    fn derived_values_consistent_for_no_expansion_params() {
+        let params = get_no_expansion_testing_params();
+        assert!(!params.expand_queries);
+        assert_eq!(params.n, 5);
+        assert_eq!(params.pt_modulus, 65536);
+        assert!(params.q2_bits >= MIN_Q2_BITS);
+    }
+
+    // ----------------------------------------------------------------
+    // pt_modulus boundary values
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn pt_modulus_power_of_two_values() {
+        for p in [2u64, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 65536] {
+            let params = make_params(&default_moduli(), 2, p, 20, 6, 2, 1);
+            assert_eq!(params.pt_modulus, p);
+            let q1 = 4 * p;
+            assert!(log2_ceil(q1) <= 64, "q1 = 4*p must fit in u64 for p={}", p);
+        }
+    }
+
+    #[test]
+    fn pt_modulus_1_is_degenerate_but_doesnt_panic() {
+        let params = make_params(&default_moduli(), 2, 1, 20, 6, 2, 1);
+        assert_eq!(params.pt_modulus, 1);
+    }
+
+    // ----------------------------------------------------------------
+    // Size computation methods
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn size_methods_are_nonzero_for_standard_params() {
+        for params in [
+            get_test_params(),
+            get_short_keygen_params(),
+            get_fast_expansion_testing_params(),
+        ] {
+            assert!(params.setup_bytes() > 0, "setup_bytes must be positive");
+            assert!(params.query_bytes() > 0, "query_bytes must be positive");
+            assert!(
+                params.query_v_buf_bytes() > 0,
+                "query_v_buf_bytes must be positive"
+            );
+            assert!(params.item_size() > 0, "item_size must be positive");
+            assert!(
+                params.bytes_per_chunk() > 0,
+                "bytes_per_chunk must be positive"
+            );
+            assert!(
+                params.modp_words_per_chunk() > 0,
+                "modp_words_per_chunk must be positive"
+            );
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Various n values
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn different_n_values_produce_valid_params() {
+        for n in [1, 2, 3, 4, 5, 8] {
+            let params = make_params(&default_moduli(), n, 256, 20, 6, 2, 1);
+            assert_eq!(params.n, n);
+            assert_eq!(params.num_items(), (1 << 6) * (1 << 2));
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Version field
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn version_0_and_nonzero_differ_in_setup_for_large_n() {
+        // With n > 2, version 0 uses num_packing_mats = n, while version > 0 uses 2
+        let p0 = Params::init(
+            2048,
+            &default_moduli(),
+            6.4, 4, 256, 20, 4, 8, 56, 8, true, 9, 6, 1, 2048, 0,
+        );
+        let p1 = Params::init(
+            2048,
+            &default_moduli(),
+            6.4, 4, 256, 20, 4, 8, 56, 8, true, 9, 6, 1, 2048, 1,
+        );
+        assert_ne!(
+            p0.setup_bytes(),
+            p1.setup_bytes(),
+            "version 0 (n packing mats) vs version 1 (2 packing mats) should differ for n=4"
+        );
+    }
+
+    #[test]
+    fn version_field_is_stored() {
+        for v in [0, 1, 2, 3] {
+            let params = Params::init(
+                2048,
+                &default_moduli(),
+                6.4, 2, 256, 20, 4, 8, 56, 8, true, 6, 2, 1, 2048, v,
+            );
+            assert_eq!(params.version, v);
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // db_dim edge cases
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn db_dim_2_zero_produces_factor_on_first_dim_1() {
+        let params = Params::init(
+            2048,
+            &default_moduli(),
+            6.4, 2, 256, 20, 4, 8, 56, 8, true, 6, 0, 1, 2048, 0,
+        );
+        assert_eq!(params.db_dim_2, 0);
+        assert_eq!(params.factor_on_first_dim(), 1);
+        assert_eq!(params.num_items(), 1 << 6);
+    }
+
+    #[test]
+    fn db_dim_2_nonzero_produces_factor_on_first_dim_2() {
+        let params = make_params(&default_moduli(), 2, 256, 20, 6, 3, 1);
+        assert_eq!(params.factor_on_first_dim(), 2);
+        assert_eq!(params.num_items(), (1 << 6) * (1 << 3));
+    }
+
+    // ----------------------------------------------------------------
+    // instances variations
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn instances_affects_item_size() {
+        let p1 = make_params(&default_moduli(), 2, 256, 20, 6, 2, 1);
+        let p4 = make_params(&default_moduli(), 2, 256, 20, 6, 2, 4);
+        assert_eq!(p4.item_size(), 4 * p1.item_size());
+    }
+
+    // ----------------------------------------------------------------
+    // Params equality / clone
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn params_clone_is_equal() {
+        let params = get_test_params();
+        let cloned = params.clone();
+        assert_eq!(params, cloned);
+    }
+
+    #[test]
+    fn different_params_are_not_equal() {
+        let p1 = make_params(&default_moduli(), 2, 256, 20, 6, 2, 1);
+        let p2 = make_params(&default_moduli(), 4, 256, 20, 6, 2, 1);
+        assert_ne!(p1, p2);
+    }
+}
