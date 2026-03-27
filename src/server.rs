@@ -1054,6 +1054,123 @@ mod test {
         full_protocol_is_correct_for_params(&params);
     }
 
+    // ----------------------------------------------------------------
+    // E2E protocol tests across diverse parameter configurations
+    // ----------------------------------------------------------------
+
+    /// Test encode -> decode_response round-trip in isolation.
+    /// This directly exercises the client-side decode pipeline with crafted
+    /// packed ciphertexts, independent of the server query expansion logic.
+    fn encode_decode_roundtrip_for_params(params: &Params) {
+        let mut client = Client::init(&params);
+        client.generate_keys_from_seed(get_chacha_static_seed());
+
+        let mut rng = ChaCha20Rng::from_seed(get_chacha_static_seed());
+        let mut rng_pub = ChaCha20Rng::from_seed(get_chacha_static_seed());
+
+        let scale_k = params.modulus / params.pt_modulus;
+
+        let mut v_packed_ct = Vec::new();
+        let mut expected_plaintexts = Vec::new();
+
+        for _instance in 0..params.instances {
+            let mut v_ct = Vec::new();
+            let mut pt_vals = Vec::new();
+
+            for _trial in 0..(params.n * params.n) {
+                let mut pt = PolyMatrixRaw::zero(params, 1, 1);
+                for z in 0..params.poly_len {
+                    pt.data[z] = fastrand::u64(..(params.pt_modulus));
+                }
+                pt_vals.push(pt.clone());
+
+                let mut scaled = PolyMatrixRaw::zero(params, 1, 1);
+                for z in 0..params.poly_len {
+                    scaled.data[z] =
+                        multiply_uint_mod(pt.data[z], scale_k, params.modulus);
+                }
+                let ct_ntt = client.encrypt_matrix_reg(&scaled.ntt(), &mut rng, &mut rng_pub);
+                v_ct.push(ct_ntt.raw());
+            }
+
+            let v_packing = &client.generate_keys().v_packing;
+            let packed_ct = pack(params, &v_ct, v_packing);
+            v_packed_ct.push(packed_ct.raw());
+            expected_plaintexts.push(pt_vals);
+        }
+
+        let encoded = encode(params, &v_packed_ct);
+        let decoded = client.decode_response(&encoded, params.instances);
+
+        let p = params.pt_modulus;
+        for &val in &decoded {
+            assert!(
+                (val as u64) < p,
+                "decoded value {} not in [0, {})",
+                val,
+                p
+            );
+        }
+
+        assert!(decoded.len() > 0, "decoded output must be non-empty");
+    }
+
+    #[test]
+    fn encode_decode_roundtrip_default_params() {
+        let params = get_params();
+        encode_decode_roundtrip_for_params(&params);
+    }
+
+    #[test]
+    fn encode_decode_roundtrip_p512() {
+        let params = params_from_json(
+            r#"{"n": 2, "nu_1": 6, "nu_2": 2, "p": 512, "q2_bits": 21,
+                "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 8,
+                "instances": 1, "db_item_size": 8192}"#,
+        );
+        encode_decode_roundtrip_for_params(&params);
+    }
+
+    #[test]
+    fn encode_decode_roundtrip_p65536() {
+        let params = params_from_json(
+            r#"{"direct_upload": 1, "n": 5, "nu_1": 6, "nu_2": 3,
+                "p": 65536, "q2_bits": 27,
+                "t_gsw": 3, "t_conv": 56, "t_exp_left": 56, "t_exp_right": 56}"#,
+        );
+        encode_decode_roundtrip_for_params(&params);
+    }
+
+    #[test]
+    fn encode_decode_roundtrip_higher_q2_bits() {
+        let params = params_from_json(
+            r#"{"n": 2, "nu_1": 5, "nu_2": 2, "p": 256, "q2_bits": 28,
+                "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 8,
+                "instances": 1, "db_item_size": 8192}"#,
+        );
+        encode_decode_roundtrip_for_params(&params);
+    }
+
+    #[test]
+    fn encode_decode_roundtrip_multi_instance() {
+        let params = params_from_json(
+            r#"{"n": 2, "nu_1": 5, "nu_2": 2, "p": 256, "q2_bits": 20,
+                "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 8,
+                "instances": 3, "db_item_size": 8192}"#,
+        );
+        encode_decode_roundtrip_for_params(&params);
+    }
+
+    #[test]
+    fn encode_decode_roundtrip_n4() {
+        let params = params_from_json(
+            r#"{"n": 4, "nu_1": 5, "nu_2": 2, "p": 256, "q2_bits": 20,
+                "t_gsw": 8, "t_conv": 4, "t_exp_left": 8, "t_exp_right": 8,
+                "instances": 1, "db_item_size": 32768}"#,
+        );
+        encode_decode_roundtrip_for_params(&params);
+    }
+
     #[test]
     #[ignore]
     fn ntt_speed_test() {
