@@ -920,6 +920,323 @@ mod test {
         get_short_keygen_params()
     }
 
+    /// Compute the expected response byte length for a given Params and num_cts,
+    /// mirroring the formula in `server::encode`.
+    fn response_byte_len(params: &Params, num_cts: usize) -> usize {
+        let q1 = 4 * params.pt_modulus;
+        let q1_bits = log2_ceil(q1) as usize;
+        let q2_bits = params.q2_bits as usize;
+        let num_bits = num_cts
+            * ((q2_bits * params.n * params.poly_len)
+                + (q1_bits * params.n * params.n * params.poly_len));
+        let round_to = 64;
+        ((num_bits + round_to - 1) / round_to) * round_to / 8
+    }
+
+    fn make_client_with_keys(params: &Params) -> Client {
+        let mut client = Client::init(params);
+        let seed = get_chacha_static_seed();
+        client.generate_keys_from_seed(seed);
+        client
+    }
+
+    // ----------------------------------------------------------------
+    // Adversarial / malformed server response tests
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn decode_response_all_zeros() {
+        let params = get_params();
+        let client = make_client_with_keys(&params);
+        let len = response_byte_len(&params, 1);
+        let data = vec![0u8; len];
+
+        let result = client.decode_response(&data, 1);
+
+        let p = params.pt_modulus;
+        for &val in &result {
+            assert!(
+                (val as u64) < p,
+                "output coefficient {} not in [0, {})",
+                val,
+                p
+            );
+        }
+    }
+
+    #[test]
+    fn decode_response_all_ones() {
+        let params = get_params();
+        let client = make_client_with_keys(&params);
+        let len = response_byte_len(&params, 1);
+        let data = vec![0xFFu8; len];
+
+        let result = client.decode_response(&data, 1);
+
+        let p = params.pt_modulus;
+        for &val in &result {
+            assert!(
+                (val as u64) < p,
+                "output coefficient {} not in [0, {})",
+                val,
+                p
+            );
+        }
+    }
+
+    #[test]
+    fn decode_response_random_garbage() {
+        let params = get_params();
+        let client = make_client_with_keys(&params);
+        let len = response_byte_len(&params, 1);
+
+        let mut rng = rand::thread_rng();
+        let data: Vec<u8> = (0..len).map(|_| rng.gen::<u8>()).collect();
+
+        let result = client.decode_response(&data, 1);
+
+        let p = params.pt_modulus;
+        for &val in &result {
+            assert!(
+                (val as u64) < p,
+                "output coefficient {} not in [0, {})",
+                val,
+                p
+            );
+        }
+    }
+
+    #[test]
+    fn decode_response_deterministic_for_same_input() {
+        let params = get_params();
+        let client = make_client_with_keys(&params);
+        let len = response_byte_len(&params, 1);
+
+        let data = vec![0xABu8; len];
+
+        let result1 = client.decode_response(&data, 1);
+        let result2 = client.decode_response(&data, 1);
+
+        assert_eq!(result1, result2, "decode_response must be deterministic for the same key and input");
+    }
+
+    #[test]
+    fn decode_response_boundary_coefficients_at_q2_half() {
+        let params = get_params();
+        let client = make_client_with_keys(&params);
+        let q2 = Q2_VALUES[params.q2_bits as usize];
+        let q2_bits = params.q2_bits as usize;
+        let q1 = 4 * params.pt_modulus;
+        let q1_bits = log2_ceil(q1) as usize;
+        let len = response_byte_len(&params, 1);
+        let p = params.pt_modulus;
+
+        // Craft a response where first-row coefficients are exactly q2/2,
+        // which sits right at the signed-centering branch boundary.
+        let mut data = vec![0u8; len];
+        let val_at_boundary = q2 / 2;
+        let mut bit_offs = 0;
+        for _ in 0..params.n * params.poly_len {
+            write_arbitrary_bits(&mut data, val_at_boundary, bit_offs, q2_bits);
+            bit_offs += q2_bits;
+        }
+        // rest rows: set to q1/2 (boundary of the second centering branch)
+        let rest_boundary = q1 / 2;
+        for _ in 0..params.n * params.n * params.poly_len {
+            write_arbitrary_bits(&mut data, rest_boundary, bit_offs, q1_bits);
+            bit_offs += q1_bits;
+        }
+
+        let result = client.decode_response(&data, 1);
+
+        for &val in &result {
+            assert!(
+                (val as u64) < p,
+                "boundary coefficient produced out-of-range output {} >= {}",
+                val,
+                p
+            );
+        }
+    }
+
+    #[test]
+    fn decode_response_boundary_coefficients_at_max_values() {
+        let params = get_params();
+        let client = make_client_with_keys(&params);
+        let q2 = Q2_VALUES[params.q2_bits as usize];
+        let q2_bits = params.q2_bits as usize;
+        let q1 = 4 * params.pt_modulus;
+        let q1_bits = log2_ceil(q1) as usize;
+        let len = response_byte_len(&params, 1);
+        let p = params.pt_modulus;
+
+        // Set first-row coefficients to q2-1 (max valid value) and
+        // rest-row coefficients to q1-1 (max valid value).
+        let mut data = vec![0u8; len];
+        let mut bit_offs = 0;
+        for _ in 0..params.n * params.poly_len {
+            write_arbitrary_bits(&mut data, q2 - 1, bit_offs, q2_bits);
+            bit_offs += q2_bits;
+        }
+        for _ in 0..params.n * params.n * params.poly_len {
+            write_arbitrary_bits(&mut data, q1 - 1, bit_offs, q1_bits);
+            bit_offs += q1_bits;
+        }
+
+        let result = client.decode_response(&data, 1);
+
+        for &val in &result {
+            assert!(
+                (val as u64) < p,
+                "max-value coefficient produced out-of-range output {} >= {}",
+                val,
+                p
+            );
+        }
+    }
+
+    #[test]
+    fn decode_response_boundary_coefficients_just_below_half() {
+        let params = get_params();
+        let client = make_client_with_keys(&params);
+        let q2 = Q2_VALUES[params.q2_bits as usize];
+        let q2_bits = params.q2_bits as usize;
+        let q1 = 4 * params.pt_modulus;
+        let q1_bits = log2_ceil(q1) as usize;
+        let len = response_byte_len(&params, 1);
+        let p = params.pt_modulus;
+
+        // q2/2 - 1 and q1/2 - 1: just before the centering threshold
+        let mut data = vec![0u8; len];
+        let mut bit_offs = 0;
+        for _ in 0..params.n * params.poly_len {
+            write_arbitrary_bits(&mut data, q2 / 2 - 1, bit_offs, q2_bits);
+            bit_offs += q2_bits;
+        }
+        for _ in 0..params.n * params.n * params.poly_len {
+            write_arbitrary_bits(&mut data, q1 / 2 - 1, bit_offs, q1_bits);
+            bit_offs += q1_bits;
+        }
+
+        let result = client.decode_response(&data, 1);
+
+        for &val in &result {
+            assert!(
+                (val as u64) < p,
+                "below-half coefficient produced out-of-range output {} >= {}",
+                val,
+                p
+            );
+        }
+    }
+
+    #[test]
+    fn decode_response_multiple_cts() {
+        let params = get_params();
+        let client = make_client_with_keys(&params);
+        let num_cts = 3;
+        let len = response_byte_len(&params, num_cts);
+
+        let data = vec![0u8; len];
+        let result = client.decode_response(&data, num_cts);
+
+        let p = params.pt_modulus;
+        for &val in &result {
+            assert!(
+                (val as u64) < p,
+                "multi-ct output coefficient {} not in [0, {})",
+                val,
+                p
+            );
+        }
+    }
+
+    #[test]
+    fn decode_response_alternating_pattern() {
+        let params = get_params();
+        let client = make_client_with_keys(&params);
+        let len = response_byte_len(&params, 1);
+
+        // 0xAA = 10101010 pattern exercises alternating bit extraction
+        let data = vec![0xAAu8; len];
+        let result = client.decode_response(&data, 1);
+
+        let p = params.pt_modulus;
+        for &val in &result {
+            assert!(
+                (val as u64) < p,
+                "alternating-pattern output {} not in [0, {})",
+                val,
+                p
+            );
+        }
+    }
+
+    #[test]
+    fn decode_response_output_is_key_dependent() {
+        let params = get_params();
+        let len = response_byte_len(&params, 1);
+        let data = vec![0x42u8; len];
+
+        let mut client1 = Client::init(&params);
+        client1.generate_keys_from_seed([0u8; 32]);
+        let result1 = client1.decode_response(&data, 1);
+
+        let mut client2 = Client::init(&params);
+        client2.generate_keys_from_seed([1u8; 32]);
+        let result2 = client2.decode_response(&data, 1);
+
+        assert_ne!(
+            result1, result2,
+            "different secret keys must produce different decode outputs for the same ciphertext"
+        );
+    }
+
+    #[test]
+    fn decode_response_with_different_params() {
+        // Test with the expansion testing params (different n, nu_1, nu_2, etc.)
+        let params = get_fast_expansion_testing_params();
+        let client = make_client_with_keys(&params);
+        let len = response_byte_len(&params, 1);
+        let p = params.pt_modulus;
+
+        for pattern in [0x00u8, 0xFFu8, 0x55u8] {
+            let data = vec![pattern; len];
+            let result = client.decode_response(&data, 1);
+
+            for &val in &result {
+                assert!(
+                    (val as u64) < p,
+                    "params={:?}, pattern=0x{:02X}: output {} not in [0, {})",
+                    (params.n, params.db_dim_1, params.db_dim_2),
+                    pattern,
+                    val,
+                    p
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decode_response_no_expansion_params() {
+        let params = get_no_expansion_testing_params();
+        let client = make_client_with_keys(&params);
+        let len = response_byte_len(&params, 1);
+        let p = params.pt_modulus;
+
+        let data = vec![0xCCu8; len];
+        let result = client.decode_response(&data, 1);
+
+        for &val in &result {
+            assert!(
+                (val as u64) < p,
+                "no-expansion params: output {} not in [0, {})",
+                val,
+                p
+            );
+        }
+    }
+
     #[test]
     fn init_is_correct() {
         let params = get_params();
